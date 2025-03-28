@@ -47,8 +47,17 @@ public class TestActivity extends AppCompatActivity {
         @Override
         public void onPlayerError(@NonNull PlaybackException error) {
             Player.Listener.super.onPlayerError(error);
-            player.prepare();
-            player.play();
+            try {
+                if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                    player.seekToDefaultPosition();
+                    player.prepare();
+                } else {
+                    player.prepare();
+                    player.play();
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
     };
 
@@ -89,14 +98,14 @@ public class TestActivity extends AppCompatActivity {
         playerView.setPlayer(player);
         playerView.setControllerShowTimeoutMs(4000);
 
-        player.setPlaybackParameters(new PlaybackParameters(1.0f, 1.0f));
-
         player.setMediaItem(
                 new MediaItem.Builder()
                         .setUri(hlsUrl)
                         .setMimeType(MimeTypes.APPLICATION_M3U8)
                         .build()
         );
+
+        player.setPlaybackParameters(new PlaybackParameters(1.0f, 1.0f));
 
         player.prepare();
         player.play();

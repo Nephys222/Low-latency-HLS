@@ -24,9 +24,20 @@ class PlayerActivity: AppCompatActivity() {
     private val playerListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
             super.onPlayerError(error)
-            viewModel.player.apply {
-                prepare()
-                play()
+            try {
+                if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                    viewModel.player.apply {
+                        seekToDefaultPosition()
+                        prepare()
+                    }
+                } else {
+                    viewModel.player.apply {
+                        prepare()
+                        play()
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
