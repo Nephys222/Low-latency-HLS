@@ -2,6 +2,9 @@ package com.example.mediatest5;
 
 import android.content.Context;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -18,9 +21,11 @@ import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.cronet.CronetDataSource;
+import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.LivePlaybackSpeedControl;
 import androidx.media3.exoplayer.LoadControl;
 import androidx.media3.exoplayer.RenderersFactory;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
@@ -43,10 +48,13 @@ public class TestActivity extends AppCompatActivity {
             Executors.newCachedThreadPool()
     );
 
+    Handler handler = new Handler(Looper.getMainLooper());
+
     private final Player.Listener playerListener = new Player.Listener() {
         @Override
         public void onPlayerError(@NonNull PlaybackException error) {
             Player.Listener.super.onPlayerError(error);
+            Log.d("Latency", String.format("Error: %s",  error.getLocalizedMessage()));
             try {
                 if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                     player.seekToDefaultPosition();
@@ -96,8 +104,13 @@ public class TestActivity extends AppCompatActivity {
         );
 
         playerView.setPlayer(player);
-        playerView.setControllerShowTimeoutMs(4000);
+        playerView.setControllerShowTimeoutMs(3_000);
+        player.setPlaybackParameters(new PlaybackParameters(1.0f, 1.0f));
 
+        /*
+         * Test stream "LL Mux" from Theo-player
+         * https://stream.mux.com/v69RSHhFelSm4701snP22dYz2jICy4E4FUyk02rW4gxRM.m3u8
+         */
         player.setMediaItem(
                 new MediaItem.Builder()
                         .setUri(hlsUrl)
@@ -105,10 +118,10 @@ public class TestActivity extends AppCompatActivity {
                         .build()
         );
 
-        player.setPlaybackParameters(new PlaybackParameters(1.0f, 1.0f));
-
         player.prepare();
         player.play();
+
+        handler.postDelayed(latencyRunnable, 5_000);
     }
 
     private void createPlayer(Context context) {
@@ -124,23 +137,33 @@ public class TestActivity extends AppCompatActivity {
                 .setEnableDecoderFallback(true);
 
         LoadControl loadControl = new DefaultLoadControl.Builder()
-                .setBackBuffer(20_000, true)
+//                .setBackBuffer(20_000, true)
                 .setBufferDurationsMs(
-                        30_000,
-                        30_000,
-                        DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                        DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
+                    500, // minBufferMs: Minimum buffer before playback resumes after re-buffering
+                    2000, // maxBufferMs: Maximum buffer to avoid loading too far ahead
+                    250, // bufferForPlaybackMs: Buffer needed to start playback
+                    500 // bufferForPlaybackAfterRebufferMs: Buffer needed after re-buffering
                 )
+                .setPrioritizeTimeOverSizeThresholds(true) // Prioritize time-based buffering
                 .build();
 
         trackSelector = new DefaultTrackSelector(this);
+
+        LivePlaybackSpeedControl liveSpeedControl = new DefaultLivePlaybackSpeedControl.Builder()
+                .setMinUpdateIntervalMs(500) // Check live offset more frequently
+                .setTargetLiveOffsetIncrementOnRebufferMs(100) // Small adjustment after re-buffering
+                .setMaxLiveOffsetErrorMsForUnitSpeed(500) // Tolerate up to 500 ms deviation before speeding up/slowing down
+                .build();
 
         player = new ExoPlayer.Builder(context)
                 .setUsePlatformDiagnostics(false)
                 .setMediaSourceFactory(
                         new DefaultMediaSourceFactory(dataSourceFactory)
-                                .setLiveTargetOffsetMs(1000)
+                                .setLiveMinOffsetMs(500) // Minimum allowable offset
+                                .setLiveMaxOffsetMs(4000) // Maximum allowable offset before forcing a jump
+                                .setLiveTargetOffsetMs(1000) // Allow playback as close as 1 second to the live edge
                 )
+                .setLivePlaybackSpeedControl(liveSpeedControl)
                 .setRenderersFactory(renderersFactory)
                 .setTrackSelector(trackSelector)
                 .setHandleAudioBecomingNoisy(true)
@@ -152,6 +175,20 @@ public class TestActivity extends AppCompatActivity {
         player.addListener(playerListener);
     }
 
+    Runnable latencyRunnable = new Runnable() {
+        @Override
+        public void run() {
+            logLatency();
+            handler.postDelayed(this,10_000);
+        }
+    };
+
+    private void logLatency() {
+        if (player != null && player.isCurrentMediaItemLive()) {
+            Log.d("Latency", String.format("Current live latency: %d ms",  player.getCurrentLiveOffset()));
+        }
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -159,5 +196,6 @@ public class TestActivity extends AppCompatActivity {
             player.release();
             player.removeListener(playerListener);
         }
+        handler.removeCallbacks(latencyRunnable);
     }
 }
